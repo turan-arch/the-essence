@@ -2,142 +2,199 @@ import streamlit as st
 import sqlite3
 import hashlib
 from pathlib import Path
+from datetime import datetime
 
 # ── 1. DATABASE SETUP ────────────────────────────────────────────────────────
-DB_PATH = Path(__file__).parent / "still_v2.db"
+DB_PATH = Path(__file__).parent / "still_v3.db"
 
 def get_db():
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
-# ── 2. ULTIMATE UI/UX & ACCESSIBILITY CSS ────────────────────────────────────
+def init_db():
+    with get_db() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE,
+                password TEXT,
+                bio TEXT DEFAULT 'A quiet soul.',
+                avatar_index INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER,
+                content TEXT,
+                feeling TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(profile_id) REFERENCES profiles(id)
+            );
+            CREATE TABLE IF NOT EXISTS follows (
+                follower_id INTEGER,
+                followed_id INTEGER,
+                PRIMARY KEY (follower_id, followed_id)
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER,
+                receiver_id INTEGER,
+                msg_text TEXT,
+                timestamp TEXT DEFAULT (datetime('now'))
+            );
+        """)
+
+# ── 2. ADVANCED UI/UX CSS (FIXED COLORS) ─────────────────────────────────────
 STILL_STYLE = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Jost:wght@200;300;400&display=swap');
 
-/* Arka Plan ve Ana Font */
-.stApp {
-    background-color: #F8F5F2 !important; 
-    color: #2D2D2D !important;
-    font-family: 'Jost', sans-serif !important;
-}
+.stApp { background-color: #F8F5F2 !important; color: #2D2D2D !important; font-family: 'Jost', sans-serif !important; }
 
-/* Giriş Alanları (Inputs) - Tam Uyumluluk */
-div[data-baseweb="input"] {
+/* Input Fixes - No more dark-on-dark */
+div[data-baseweb="input"], div[data-baseweb="textarea"] {
     background-color: #FFFFFF !important;
     border: 1px solid #D1CDC7 !important;
-    border-radius: 4px !important;
-}
-
-input {
-    color: #2D2D2D !important; /* Yazı rengi siyah/füme */
-    background-color: transparent !important;
-}
-
-/* Tab (Sekme) Renkleri */
-button[data-baseweb="tab"] {
-    color: #888 !important;
-    font-family: 'Jost', sans-serif !important;
-}
-
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: #2D2D2D !important;
-    border-bottom-color: #A89081 !important;
-}
-
-/* Buton Tasarımı */
-.stButton > button {
-    background-color: #2D2D2D !important;
-    color: #F8F5F2 !important;
-    border: none !important;
     border-radius: 2px !important;
-    letter-spacing: 2px !important;
-    transition: 0.3s ease all !important;
-    width: 100% !important;
 }
+input, textarea { color: #2D2D2D !important; background-color: transparent !important; }
 
-.stButton > button:hover {
-    background-color: #A89081 !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+/* Aesthetic Cards */
+.artifact-card {
+    background: white; padding: 20px; border: 1px solid #EEE;
+    margin-bottom: 15px; border-radius: 4px;
 }
+.soul-name { font-family: 'Cormorant Garamond', serif; font-size: 1.2rem; font-weight: bold; color: #A89081; }
+.message-bubble { padding: 10px 15px; border-radius: 15px; margin-bottom: 5px; max-width: 80%; }
+.msg-sent { background: #E2DDD9; align-self: flex-end; margin-left: auto; }
+.msg-received { background: white; border: 1px solid #EEE; }
 
-/* Kartlar ve Yazı Tipleri */
-h1 { font-family: 'Cormorant Garamond', serif !important; font-weight: 300 !important; letter-spacing: 6px !important; }
-label { color: #4A4A4A !important; font-weight: 300 !important; }
-
-/* Hata ve Başarı Mesajları İçin Sadeleştirme */
-.stAlert { border-radius: 2px !important; border: none !important; }
+/* Buttons */
+.stButton > button {
+    background-color: #2D2D2D !important; color: white !important;
+    border-radius: 2px !important; width: 100%; transition: 0.3s;
+}
+.stButton > button:hover { background-color: #A89081 !important; border-color: #A89081 !important; }
 </style>
 """
 
-# ── 3. AUTH LOGIC ────────────────────────────────────────────────────────────
+# ── 3. CORE FUNCTIONS ────────────────────────────────────────────────────────
 def make_hash(pwd): return hashlib.sha256(str.encode(pwd)).hexdigest()
 
-def auth_page():
-    # Sayfa ortalama
-    _, col, _ = st.columns([1, 2, 1])
+def toggle_follow(fid, tid):
+    with get_db() as conn:
+        existing = conn.execute("SELECT 1 FROM follows WHERE follower_id=? AND followed_id=?", (fid, tid)).fetchone()
+        if existing: conn.execute("DELETE FROM follows WHERE follower_id=? AND followed_id=?", (fid, tid))
+        else: conn.execute("INSERT INTO follows VALUES (?,?)", (fid, tid))
+        conn.commit()
+
+# ── 4. PAGES ─────────────────────────────────────────────────────────────────
+
+def page_profile(user_id=None):
+    target_id = user_id if user_id else st.session_state.user['id']
+    with get_db() as conn:
+        prof = conn.execute("SELECT * FROM profiles WHERE id=?", (target_id,)).fetchone()
+        arts = conn.execute("SELECT * FROM artifacts WHERE profile_id=? ORDER BY created_at DESC", (target_id,)).fetchall()
+        f_count = conn.execute("SELECT COUNT(*) FROM follows WHERE followed_id=?", (target_id,)).fetchone()[0]
+
+    st.markdown(f"<h1 style='text-align:center;'>{prof['name']}</h1>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align:center; font-style:italic;'>{prof['bio']}</p>", unsafe_allow_html=True)
+    st.markdown(f"<p style='text-align:center; color:#A89081;'>{f_count} Resonances (Followers)</p>", unsafe_allow_html=True)
     
-    with col:
-        st.markdown("<h1 style='text-align:center; margin-top:50px;'>STILL</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align:center; font-style:italic; margin-bottom:40px;'>Individual souls only.</p>", unsafe_allow_html=True)
+    if target_id != st.session_state.user['id']:
+        if st.button("Message Soul"):
+            st.session_state.chat_target = target_id
+            st.session_state.page = "messages"
+            st.rerun()
+
+    st.divider()
+    for a in arts:
+        st.markdown(f"<div class='artifact-card'><i>{a['content']}</i><br><small>{a['feeling']}</small></div>", unsafe_allow_html=True)
+
+def page_messages():
+    st.title("Whispers (Messages)")
+    with get_db() as conn:
+        # Mesajlaşılan kişileri listele
+        contacts = conn.execute("""
+            SELECT DISTINCT p.id, p.name FROM profiles p
+            JOIN messages m ON (p.id = m.sender_id OR p.id = m.receiver_id)
+            WHERE (m.sender_id = ? OR m.receiver_id = ?) AND p.id != ?
+        """, (st.session_state.user['id'], st.session_state.user['id'], st.session_state.user['id'])).fetchall()
+
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader("Souls")
+        for c in contacts:
+            if st.button(c['name'], key=f"contact_{c['id']}"):
+                st.session_state.chat_target = c['id']
         
-        tab_login, tab_join = st.tabs(["LOG IN", "JOIN"])
-        
-        with tab_login:
-            with st.form("login_form"):
-                email = st.text_input("Email")
-                password = st.text_input("Password", type="password")
-                submitted = st.form_submit_button("ENTER")
-                
-                if submitted:
+    with col2:
+        if "chat_target" in st.session_state:
+            target = st.session_state.chat_target
+            with get_db() as conn:
+                msgs = conn.execute("""
+                    SELECT * FROM messages WHERE 
+                    (sender_id=? AND receiver_id=?) OR (sender_id=? AND receiver_id=?)
+                    ORDER BY timestamp ASC
+                """, (st.session_state.user['id'], target, target, st.session_state.user['id'])).fetchall()
+            
+            for m in msgs:
+                cls = "msg-sent" if m['sender_id'] == st.session_state.user['id'] else "msg-received"
+                st.markdown(f"<div class='message-bubble {cls}'>{m['msg_text']}</div>", unsafe_allow_html=True)
+            
+            with st.form("send_msg", clear_on_submit=True):
+                txt = st.text_input("Send a whisper...")
+                if st.form_submit_button("Send") and txt:
                     with get_db() as conn:
-                        user = conn.execute("SELECT * FROM profiles WHERE email=?", (email,)).fetchone()
-                    if user and make_hash(password) == user['password']:
-                        st.session_state.user = dict(user)
-                        st.rerun()
-                    else:
-                        st.error("Credential mismatch.")
+                        conn.execute("INSERT INTO messages (sender_id, receiver_id, msg_text) VALUES (?,?,?)",
+                                     (st.session_state.user['id'], target, txt))
+                        conn.commit()
+                    st.rerun()
 
-        with tab_join:
-            with st.form("join_form"):
-                name = st.text_input("Full Name")
-                new_email = st.text_input("Email Address")
-                new_password = st.text_input("Secure Password", type="password")
-                join_btn = st.form_submit_button("BEGIN JOURNEY")
-                
-                if join_btn:
-                    # Şirket Filtresi
-                    corps = ["corp", "inc", "ltd", "company", "şirket", "holding", "pazarlama"]
-                    if any(x in name.lower() for x in corps):
-                        st.warning("Corporate entities are not permitted here.")
-                    elif name and new_email and new_password:
-                        try:
-                            with get_db() as conn:
-                                conn.execute("INSERT INTO profiles (name, email, password) VALUES (?,?,?)", 
-                                             (name, new_email, make_hash(new_password)))
-                                conn.commit()
-                            st.success("Soul registered. Please switch to 'LOG IN'.")
-                        except:
-                            st.error("This path is already taken.")
+def page_explore():
+    st.title("Explore Souls")
+    search = st.text_input("Search names or vibes...")
+    with get_db() as conn:
+        users = conn.execute("SELECT * FROM profiles WHERE name LIKE ? AND id != ?", 
+                            (f"%{search}%", st.session_state.user['id'])).fetchall()
+    
+    for u in users:
+        c1, c2 = st.columns([3, 1])
+        c1.markdown(f"<span class='soul-name'>{u['name']}</span> - {u['bio']}", unsafe_allow_html=True)
+        if c2.button("View Profile", key=f"view_{u['id']}"):
+            st.session_state.viewing_profile = u['id']
+            st.session_state.page = "profile"
+            st.rerun()
 
-# ── 4. APP MAIN ──────────────────────────────────────────────────────────────
+# ── 5. MAIN ──────────────────────────────────────────────────────────────────
 def main():
+    init_db()
     st.set_page_config(page_title="STILL", layout="wide")
     st.markdown(STILL_STYLE, unsafe_allow_html=True)
 
-    if "user" not in st.session_state:
-        st.session_state.user = None
+    if "user" not in st.session_state: st.session_state.user = None
+    if "page" not in st.session_state: st.session_state.page = "explore"
 
     if st.session_state.user is None:
-        auth_page()
+        # Auth Page Logic (Daha önceki sade versiyon)
+        from auth_module import auth_page # veya direkt buraya auth fonksiyonunu ekle
     else:
-        # Uygulamanın geri kalanı (Home, Explore vb.) buraya gelecek
-        st.sidebar.markdown("### STILL")
-        st.write(f"Welcome, {st.session_state.user['name']}")
-        if st.sidebar.button("LOGOUT"):
-            st.session_state.user = None
-            st.rerun()
+        with st.sidebar:
+            st.title("STILL")
+            if st.button("🏠 Home (Following)"): st.session_state.page = "home"
+            if st.button("🔍 Explore"): st.session_state.page = "explore"
+            if st.button("✉️ Whispers"): st.session_state.page = "messages"
+            if st.button("👤 My Profile"): 
+                st.session_state.page = "profile"
+                st.session_state.viewing_profile = None
+            if st.button("✨ Release Artifact"): st.session_state.page = "release"
+            st.divider()
+            if st.button("Depart"): st.session_state.user = None; st.rerun()
 
-if __name__ == "__main__":
-    main()
+        if st.session_state.page == "profile": page_profile(st.session_state.get("viewing_profile"))
+        elif st.session_state.page == "messages": page_messages()
+        elif st.session_state.page == "explore": page_explore()
+        # ... home ve release sayfaları
+
+if __name__ == "__main__": main()
