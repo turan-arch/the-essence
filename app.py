@@ -36,7 +36,13 @@ def apply_theme(mode):
     .artifact-card {{ background: {input_bg}; padding: 20px; border: 1px solid {border}; border-radius: 4px; margin-bottom: 20px; }}
     .stButton > button {{ background-color: {text} !important; color: {bg} !important; border-radius: 2px !important; width: 100%; }}
     </style>
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_html=True) 
+    
+    /* Anti-Black Box Hack */
+    input, textarea {{ background-color: {input_bg} !important; -webkit-text-fill-color: {text} !important; }}
+    input:-webkit-autofill {{ -webkit-box-shadow: 0 0 0px 1000px {input_bg} inset !important; -webkit-text-fill-color: {text} !important; }}
+    div[data-baseweb="input"], div[data-baseweb="textarea"] {{ background-color: {input_bg} !important; border: 1px solid {border} !important; }}
+
 
 # ── 3. SOCIAL LOGIC ─────────────────────────────────────────────────────────
 def make_hash(p): return hashlib.sha256(str.encode(p)).hexdigest()
