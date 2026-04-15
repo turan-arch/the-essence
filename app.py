@@ -6,15 +6,14 @@ import base64
 import json
 from datetime import datetime
 from pathlib import Path
-import io
 import uuid
 
-# ── Configuration ──────────────────────────────────────────────────────────────
-DB_PATH = "still_v3.db" # Veritabanı yapısı değiştiği için v3 yaptık
+# ── Yapılandırma ──────────────────────────────────────────────────────────────
+DB_PATH = "still_pro.db"
 UPLOAD_DIR = "artifacts"
 Path(UPLOAD_DIR).mkdir(exist_ok=True)
 
-# ── Database ───────────────────────────────────────────────────────────────────
+# ── Veritabanı Fonksiyonları ──────────────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -48,157 +47,220 @@ def init_db():
         CREATE TABLE IF NOT EXISTS follows (
             follower_id INTEGER,
             followed_id INTEGER,
-            PRIMARY KEY (follower_id, followed_id),
-            FOREIGN KEY(follower_id) REFERENCES profiles(id),
-            FOREIGN KEY(followed_id) REFERENCES profiles(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS resonances (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            artifact_id INTEGER,
-            session_id TEXT
+            PRIMARY KEY (follower_id, followed_id)
         );
     """)
     conn.commit()
     conn.close()
 
-# ── Logic Helpers ──────────────────────────────────────────────────────────────
-def is_corporate(name):
-    """Şirketleşmeyi engelleyen basit ama etkili filtre."""
-    blacklist = ["corp", "inc", "ltd", "company", "şirket", "holding", "llc", "as.", "a.ş."]
-    return any(word in name.lower() for word in blacklist)
+# ── Yardımcı Fonksiyonlar ─────────────────────────────────────────────────────
+def make_hashes(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
 
-def toggle_follow(followed_id):
-    me = st.session_state.user['id']
-    conn = get_db()
-    exists = conn.execute("SELECT 1 FROM follows WHERE follower_id=? AND followed_id=?", (me, followed_id)).fetchone()
-    if exists:
-        conn.execute("DELETE FROM follows WHERE follower_id=? AND followed_id=?", (me, followed_id))
-        toast("Path diverged.")
-    else:
-        conn.execute("INSERT INTO follows (follower_id, followed_id) VALUES (?,?)", (me, followed_id))
-        toast("Paths crossed.")
-    conn.commit()
-    conn.close()
+def check_hashes(password, hashed_text):
+    return make_hashes(password) == hashed_text
 
 def toast(message):
-    st.markdown(f'<div class="resonate-toast">{message}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="still-toast">{message}</div>', unsafe_allow_html=True)
 
-# ── CSS (Orijinal 'Still' Estetiği) ───────────────────────────────────────────
+def is_corporate(name):
+    # Kurumsal kelime filtresi
+    blacklist = ["corp", "inc", "ltd", "company", "şirket", "holding", "llc", "as.", "a.ş.", "sanayi", "ticaret"]
+    return any(word in name.lower() for word in blacklist)
+
+# ── Gelişmiş Tasarım (CSS) ────────────────────────────────────────────────────
 CUSTOM_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Jost:wght@300;400&display=swap');
-:root { --warm-white: #F7F4EF; --charcoal: #2C2C2C; --dust: #9E9890; --ivory: #EDE8DF; --serif: 'Cormorant Garamond', serif; --sans: 'Jost', sans-serif; }
-html, body, [data-testid="stAppViewContainer"] { background: var(--warm-white) !important; color: var(--charcoal); font-family: var(--sans); }
-.still-wordmark { font-family: var(--serif); font-size: 2rem; letter-spacing: 0.3em; text-transform: uppercase; padding: 1.5rem 0; text-align: center; }
-.resonate-toast { position: fixed; bottom: 2rem; right: 2rem; background: var(--charcoal); color: white; padding: 0.8rem 1.5rem; z-index: 9999; animation: fade 3s forwards; }
-@keyframes fade { 0%, 100% {opacity:0} 10%, 90% {opacity:1} }
-.artifact-card { background: var(--ivory); margin-bottom: 1.5rem; padding: 0.5rem; border-radius: 2px; box-shadow: 0 2px 10px rgba(0,0,0,0.03); }
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Jost:wght@200;300;400&display=swap');
+
+:root {
+    --bg: #F9F7F2;
+    --card: #FFFFFF;
+    --text: #1A1A1A;
+    --accent: #7A6B5A;
+    --muted: #9E9890;
+    --border: rgba(0,0,0,0.08);
+}
+
+/* Genel Reset ve Erişilebilirlik */
+html, body, [data-testid="stAppViewContainer"] {
+    background-color: var(--bg) !important;
+    color: var(--text);
+    font-family: 'Jost', sans-serif;
+}
+
+/* Ortalı Giriş/Kayıt Ekranı */
+.auth-container {
+    max-width: 400px;
+    margin: 100px auto;
+    padding: 40px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.03);
+    border-radius: 4px;
+    text-align: center;
+}
+
+.still-wordmark {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 2.4rem;
+    letter-spacing: 0.4em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+    color: var(--text);
+}
+
+/* Modern Kart Yapısı */
+.artifact-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    padding: 20px;
+    margin-bottom: 25px;
+    transition: transform 0.3s ease;
+}
+.artifact-card:hover { transform: translateY(-5px); }
+
+/* Toast Bildirimleri */
+.still-toast {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    background: var(--text);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 2px;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    z-index: 10000;
+    animation: slideIn 0.5s ease, fadeOut 0.5s ease 2.5s forwards;
+}
+
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes fadeOut { to { opacity: 0; visibility: hidden; } }
+
+/* Form Elemanları */
+.stButton>button {
+    width: 100%;
+    background-color: var(--text) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 0px !important;
+    letter-spacing: 0.2em;
+    padding: 0.6rem !important;
+}
 </style>
 """
 
-# ── Pages ──────────────────────────────────────────────────────────────────────
+# ── Sayfa Fonksiyonları ────────────────────────────────────────────────────────
+def login_page():
+    st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+    st.markdown('<p class="still-wordmark">STILL</p>', unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["GİRİŞ", "KATIL"])
+    
+    with tab1:
+        email = st.text_input("E-posta", key="login_email")
+        password = st.text_input("Şifre", type="password", key="login_pwd")
+        if st.button("ADIM AT"):
+            conn = get_db()
+            user = conn.execute("SELECT * FROM profiles WHERE email=?", (email,)).fetchone()
+            conn.close()
+            if user and check_hashes(password, user['password']):
+                st.session_state.user = dict(user)
+                st.rerun()
+            else:
+                st.error("Ruh eşleşmedi. Bilgileri kontrol et.")
+                
+    with tab2:
+        new_name = st.text_input("İsim", key="reg_name", placeholder="Bireysel isminiz")
+        new_email = st.text_input("E-posta", key="reg_email")
+        new_pwd = st.text_input("Şifre", type="password", key="reg_pwd")
+        if st.button("ALANA GİR"):
+            if is_corporate(new_name):
+                st.warning("Still sadece bireysel ruhlar içindir. Şirketleşmeye burada yer yok.")
+            elif new_name and new_email and new_pwd:
+                conn = get_db()
+                try:
+                    conn.execute("INSERT INTO profiles (email, password, name) VALUES (?,?,?)", 
+                                 (new_email, make_hashes(new_pwd), new_name))
+                    conn.commit()
+                    st.success("Hoş geldin. Şimdi giriş yapabilirsin.")
+                except:
+                    st.error("Bu e-posta zaten bir yolculuğa dahil.")
+                finally:
+                    conn.close()
+    st.markdown('</div>', unsafe_allow_html=True)
+
 def page_home():
-    st.markdown('<p class="still-wordmark">Home</p>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align:center; color:gray; font-style:italic;">Your followed paths</p>', unsafe_allow_html=True)
+    st.markdown(f"### Merhaba, {st.session_state.user['name']}")
+    st.write("Takip ettiğin kişilerin sessiz paylaşımları.")
+    
     conn = get_db()
-    # Sadece takip edilenlerin gönderileri
     rows = conn.execute("""
         SELECT a.*, p.name FROM artifacts a 
         JOIN profiles p ON a.profile_id = p.id
         WHERE a.profile_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)
         ORDER BY a.created_at DESC
     """, (st.session_state.user['id'],)).fetchall()
+    conn.close()
     
     if not rows:
-        st.info("Your feed is quiet. Explore to find people to follow.")
+        st.info("Burası şu an sessiz. Keşfet kısmından yeni insanlar bulabilirsin.")
     else:
         render_grid(rows)
-    conn.close()
 
 def page_explore():
-    st.markdown('<p class="still-wordmark">Explore</p>', unsafe_allow_html=True)
-    search_query = st.text_input("Search for souls, names or atmospheres...", placeholder="Light, Elia, Still...")
+    search = st.text_input("Ara: İsim, his veya doku...", placeholder="Işık, yalnızlık, Duru...")
     
     conn = get_db()
     query = """
         SELECT a.*, p.name FROM artifacts a 
         JOIN profiles p ON a.profile_id = p.id
         WHERE (a.soul LIKE ? OR p.name LIKE ? OR a.atmo_tags LIKE ?)
-        ORDER BY RANDOM()
+        ORDER BY a.created_at DESC
     """
-    param = f"%{search_query}%"
-    rows = conn.execute(query, (param, param, param)).fetchall()
-    render_grid(rows)
+    rows = conn.execute(query, (f"%{search}%", f"%{search}%", f"%{search}%")).fetchall()
     conn.close()
+    render_grid(rows)
 
 def render_grid(rows):
     cols = st.columns(3)
     for i, row in enumerate(rows):
         with cols[i % 3]:
-            st.markdown(f'<div class="artifact-card"><b>{row["name"]}</b><br><i>"{row["soul"]}"</i></div>', unsafe_allow_html=True)
-            if st.button(f"◈ {row['resonance_count']}", key=f"res_{row['id']}"):
-                # Resonance logic here...
-                pass
+            st.markdown(f"""
+            <div class="artifact-card">
+                <p style="font-size:0.7rem; color:gray; letter-spacing:0.1em;">{row['name'].upper()}</p>
+                <p style="font-family:'Cormorant Garamond'; font-style:italic; font-size:1.1rem;">"{row['soul']}"</p>
+                <p style="font-size:0.8rem; color:var(--muted);">{row['feeling']}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-def page_people():
-    st.markdown('<p class="still-wordmark">The People</p>', unsafe_allow_html=True)
-    conn = get_db()
-    users = conn.execute("SELECT * FROM profiles WHERE id != ?", (st.session_state.user['id'],)).fetchall()
-    for u in users:
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.markdown(f"### {u['name']}\n*{u['essence']}*")
-        with col2:
-            is_following = conn.execute("SELECT 1 FROM follows WHERE follower_id=? AND followed_id=?", 
-                                         (st.session_state.user['id'], u['id'])).fetchone()
-            label = "Following" if is_following else "Follow"
-            if st.button(label, key=f"fol_{u['id']}"):
-                toggle_follow(u['id'])
-                st.rerun()
-    conn.close()
-
-# ── Auth & Entry ──────────────────────────────────────────────────────────────
+# ── Ana Döngü ─────────────────────────────────────────────────────────────────
 def main():
+    init_db()
     st.set_page_config(page_title="Still", page_icon="○", layout="wide")
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    init_db()
 
-    if "user" not in st.session_state: st.session_state.user = None
-    if "page" not in st.session_state: st.session_state.page = "explore"
+    if "user" not in st.session_state:
+        st.session_state.user = None
+    if "page" not in st.session_state:
+        st.session_state.page = "home"
 
     if st.session_state.user is None:
-        auth_section()
+        login_page()
     else:
-        sidebar_nav()
+        with st.sidebar:
+            st.markdown('<p class="still-wordmark">STILL</p>', unsafe_allow_html=True)
+            if st.button("AKIS"): st.session_state.page = "home"
+            if st.button("KESFET"): st.session_state.page = "explore"
+            if st.button("BIRAK"): st.session_state.page = "upload"
+            st.markdown("---")
+            if st.button("CIKIS"):
+                st.session_state.user = None
+                st.rerun()
+        
         if st.session_state.page == "home": page_home()
         elif st.session_state.page == "explore": page_explore()
-        elif st.session_state.page == "people": page_people()
-        # Diğer sayfalar...
-
-def auth_section():
-    st.markdown('<p class="still-wordmark">Still</p>', unsafe_allow_html=True)
-    tab1, tab2 = st.tabs(["Login", "Register"])
-    with tab2:
-        name = st.text_input("Full Name")
-        email = st.text_input("Email")
-        pwd = st.text_input("Password", type="password")
-        if st.button("Arrive"):
-            if is_corporate(name):
-                st.error("Still is for individual souls only. No corporate entities.")
-            else:
-                # DB kayıt işlemi...
-                st.success("Welcome. Please login.")
-
-def sidebar_nav():
-    with st.sidebar:
-        st.markdown('<p class="still-wordmark">Still</p>', unsafe_allow_html=True)
-        if st.button("Home (Following)"): st.session_state.page = "home"
-        if st.button("Explore (Discover)"): st.session_state.page = "explore"
-        if st.button("The People"): st.session_state.page = "people"
-        if st.button("Logout"): 
-            st.session_state.user = None
-            st.rerun()
 
 if __name__ == "__main__":
     main()
