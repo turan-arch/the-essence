@@ -2,16 +2,15 @@ import streamlit as st
 import sqlite3
 import hashlib
 import os
-import base64
 from datetime import datetime
 from pathlib import Path
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-DB_PATH = "still_safe.db"
+DB_PATH = "still.db"
 UPLOAD_DIR = "artifacts"
 Path(UPLOAD_DIR).mkdir(exist_ok=True)
 
-# ── Database ───────────────────────────────────────────────────────────────────
+# ── Database & Migration ───────────────────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -23,173 +22,207 @@ def init_db():
     c.executescript("""
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
+            email TEXT UNIQUE,
+            password TEXT,
             name TEXT NOT NULL,
+            pronouns TEXT,
+            essence TEXT,
+            obsessions TEXT,
+            song_looping TEXT,
             created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id INTEGER,
+            image_path TEXT,
+            soul TEXT,
+            feeling TEXT,
+            atmo_tags TEXT,
+            resonance_count INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(profile_id) REFERENCES profiles(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS follows (
+            follower_id INTEGER,
+            followed_id INTEGER,
+            PRIMARY KEY (follower_id, followed_id)
         );
     """)
     conn.commit()
     conn.close()
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def make_hashes(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+def migrate_passwords():
+    """Düz metin şifreleri güvenli hash'e çevirir ve giriş sorununu çözer."""
+    conn = get_db()
+    users = conn.execute("SELECT id, password FROM profiles").fetchall()
+    for user in users:
+        if user['password'] and len(user['password']) != 64:
+            new_hash = hashlib.sha256(str.encode(user['password'])).hexdigest()
+            conn.execute("UPDATE profiles SET password = ? WHERE id = ?", (new_hash, user['id']))
+    conn.commit()
+    conn.close()
 
-def check_hashes(password, hashed_text):
-    return make_hashes(password) == hashed_text
+def is_corporate(name):
+    blacklist = ["corp", "inc", "ltd", "company", "şirket", "holding", "as.", "a.ş."]
+    return any(word in name.lower() for word in blacklist)
 
-# ── CSS (Orijinal Tasarım Korundu, UX İyileştirildi) ──────────────────────────
+# ── CSS (Noble & Accessible) ──────────────────────────────────────────────────
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300&family=Jost:wght@200;300;400&display=swap');
 
 :root {
-    --bg: #F9F7F2; /* Biraz daha sıcak kemik rengi */
-    --card: #FFFFFF;
-    --text: #1A1A1A; /* Net okunabilir metin */
-    --accent: #C4A898; /* Senin asil blush rengin */
-    --border: rgba(0,0,0,0.06);
-    --input-bg: #2C2C2C; /* Koyu input zemini baki */
-    --serif: 'Cormorant Garamond', serif;
-    --sans: 'Jost', sans-serif;
+    --bg: #F7F4EF;
+    --text: #1A1A1A;
+    --accent: #C4A898;
+    --input-bg: #2C2C2C;
 }
 
 html, body, [data-testid="stAppViewContainer"] {
     background-color: var(--bg) !important;
     color: var(--text);
-    font-family: var(--sans);
+    font-family: 'Jost', sans-serif;
 }
 
-/* Ortalı Login Kartı */
+/* Auth Center Card */
 .auth-wrapper {
     max-width: 420px;
-    margin: 100px auto;
-    padding: 50px;
-    background: var(--card);
-    border: 1px solid var(--border);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.03);
+    margin: 80px auto;
+    padding: 40px;
+    background: white;
+    border: 1px solid rgba(0,0,0,0.05);
     border-radius: 4px;
     text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.02);
 }
 
 .still-logo {
-    font-family: var(--serif);
-    font-size: 2.6rem;
-    letter-spacing: 0.4em;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 2.8rem;
+    letter-spacing: 0.5em;
     text-transform: uppercase;
-    margin-bottom: 0.8rem;
-    color: var(--text);
+    margin-bottom: 2rem;
 }
 
-.still-sub {
-    font-family: var(--sans);
-    font-size: 0.68rem;
-    letter-spacing: 0.25em;
-    text-transform: uppercase;
-    color: var(--dust);
-    margin-bottom: 2.5rem;
-}
-
-/* Input Etiketleri ve UX Düzeltmesi */
-.stTextInput > label,
-.stTextArea > label {
-    font-family: var(--serif) !important;
+/* Accessibility Fixes for Inputs */
+.stTextInput > label {
+    font-family: 'Cormorant Garamond', serif !important;
     font-style: italic !important;
-    font-size: 1rem !important;
-    color: var(--text) !important; /* Net OKUNABİLİR etiketler */
-    margin-bottom: 0.3rem !important;
+    color: var(--text) !important;
+    font-size: 1.1rem !important;
 }
 
-.stTextInput input,
-.stTextArea textarea {
-    background: var(--input-bg) !important; /* Koyu zemin baki */
-    border: 1px solid var(--input-bg) !important;
+.stTextInput input {
+    background-color: var(--input-bg) !important;
+    color: #FFFFFF !important; /* Net white text */
     border-radius: 2px !important;
-    font-family: var(--sans) !important;
-    font-weight: 300 !important;
-    color: #FFFFFF !important; /* İçindeki metin METNİN RENGİ NET BEYAZ */
-    padding: 1rem !important;
+    padding: 12px !important;
 }
 
-/* Odaklanma Efekti (UX Feedback) */
-.stTextInput input:focus,
-.stTextArea textarea:focus {
-    border-color: var(--accent) !important; /* Blush rengi çerçeve */
-    box-shadow: 0 0 0 2px rgba(196,168,152,0.15) !important;
-}
-
-/* Standartların Üstünde Butonlar */
 .stButton > button {
     width: 100%;
-    background-color: var(--text) !important; /* Siyah baki */
-    color: #FFFFFF !important;
+    background-color: var(--text) !important;
+    color: white !important;
     border: none !important;
-    font-family: var(--sans) !important;
-    font-size: 0.72rem !important;
     letter-spacing: 0.2em !important;
     text-transform: uppercase !important;
-    padding: 0.8rem !important;
-    border-radius: 2px !important;
-    transition: 0.3s ease !important;
+    padding: 10px !important;
+    transition: 0.3s;
 }
 
-.stButton > button:hover {
-    background-color: var(--accent) !important; /* Blush rengi hover */
+.stButton > button:hover { background-color: var(--accent) !important; }
+
+.artifact-card {
+    background: white;
+    padding: 20px;
+    border: 1px solid rgba(0,0,0,0.05);
+    margin-bottom: 20px;
 }
-
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] { background: transparent !important; }
-.stTabs [data-baseweb="tab"] { font-size: 0.75rem !important; letter-spacing: 0.15em !important; }
-
 </style>
 """
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
-def auth_page():
+def login_page():
     st.markdown('<div class="auth-wrapper">', unsafe_allow_html=True)
     st.markdown('<p class="still-logo">STILL</p>', unsafe_allow_html=True)
-    st.markdown('<p class="still-sub">A room to simply be</p>', unsafe_allow_html=True)
     
     tab1, tab2 = st.tabs(["LOG IN", "JOIN"])
     
     with tab1:
-        email = st.text_input("Enter your Email", key="l_email", placeholder="elia.voss@still.app")
-        pwd = st.text_input("Enter your Password", type="password", key="l_pwd")
-        st.markdown("<br>", unsafe_allow_html=True) # Boşluk UX
+        email = st.text_input("Email", key="l_email")
+        pwd = st.text_input("Password", type="password", key="l_pwd")
         if st.button("ENTER"):
             conn = get_db()
             user = conn.execute("SELECT * FROM profiles WHERE email=?", (email,)).fetchone()
             conn.close()
-            if user and check_hashes(pwd, user['password']):
+            if user and hashlib.sha256(str.encode(pwd)).hexdigest() == user['password']:
                 st.session_state.user = dict(user)
                 st.rerun()
             else: st.error("The soul did not match our records.")
 
     with tab2:
-        name = st.text_input("Full Individual Name", key="r_name", placeholder="Elia Voss")
-        r_email = st.text_input("Email Address", key="r_email", placeholder="elia@proton.me")
+        name = st.text_input("Full Name", key="r_name")
+        r_email = st.text_input("Email", key="r_email")
         r_pwd = st.text_input("Password", type="password", key="r_pwd")
-        st.markdown("<br>", unsafe_allow_html=True) # Boşluk UX
         if st.button("BEGIN JOURNEY"):
-            # DB kayıt işlemleri...
-            st.success("Welcome. Please login.")
-
+            if is_corporate(name):
+                st.warning("Individual souls only. No corporate entities.")
+            elif name and r_email and r_pwd:
+                conn = get_db()
+                try:
+                    h = hashlib.sha256(str.encode(r_pwd)).hexdigest()
+                    conn.execute("INSERT INTO profiles (email, password, name) VALUES (?,?,?)", (r_email, h, name))
+                    conn.commit()
+                    st.success("Journey started. Please log in.")
+                except: st.error("Email already in use.")
+                finally: conn.close()
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+def page_explore():
+    st.markdown("### Explore Souls")
+    search = st.text_input("Search for names, moods or vibes...")
+    conn = get_db()
+    query = """
+        SELECT a.*, p.name FROM artifacts a 
+        JOIN profiles p ON a.profile_id = p.id
+        WHERE (p.name LIKE ? OR a.soul LIKE ? OR a.atmo_tags LIKE ?)
+        ORDER BY RANDOM()
+    """
+    rows = conn.execute(query, (f"%{search}%", f"%{search}%", f"%{search}%")).fetchall()
+    
+    cols = st.columns(3)
+    for i, row in enumerate(rows):
+        with cols[i % 3]:
+            st.markdown(f'<div class="artifact-card"><b>{row["name"]}</b><br><i>{row["soul"]}</i></div>', unsafe_allow_html=True)
+    conn.close()
+
+# ── Main Loop ──────────────────────────────────────────────────────────────────
 def main():
     init_db()
-    st.set_page_config(page_title="Still", page_icon="○", layout="wide")
+    migrate_passwords() # Otomatik tamir
+    st.set_page_config(page_title="Still", layout="wide")
     st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
     if "user" not in st.session_state: st.session_state.user = None
-    
+    if "page" not in st.session_state: st.session_state.page = "explore"
+
     if st.session_state.user is None:
-        auth_page()
+        login_page()
     else:
-        # Ana içerik...
-        pass
+        with st.sidebar:
+            st.markdown('<p class="still-logo" style="font-size:1.5rem;">STILL</p>', unsafe_allow_html=True)
+            if st.button("FEED"): st.session_state.page = "home"
+            if st.button("EXPLORE"): st.session_state.page = "explore"
+            if st.button("RELEASE"): st.session_state.page = "upload"
+            st.markdown("---")
+            if st.button("DEPART"):
+                st.session_state.user = None
+                st.rerun()
+        
+        if st.session_state.page == "explore": page_explore()
+        # Diğer sayfalar (home, upload) buraya eklenebilir.
 
 if __name__ == "__main__":
     main()
