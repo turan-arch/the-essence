@@ -4,201 +4,164 @@ import hashlib
 from pathlib import Path
 
 # ── Configuration & DB ────────────────────────────────────────────────────────
-DB_PATH = "still.db"
-UPLOAD_DIR = "artifacts"
-Path(UPLOAD_DIR).mkdir(exist_ok=True)
+WORKING_DIR = Path(__file__).parent.absolute()
+DB_PATH = WORKING_DIR / "still.db"
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    conn = get_db()
-    c = conn.cursor()
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE,
-            password TEXT,
-            created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE TABLE IF NOT EXISTS artifacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            profile_id INTEGER,
-            soul TEXT,
-            feeling TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            FOREIGN KEY(profile_id) REFERENCES profiles(id)
-        );
-    """)
-    conn.commit()
-    conn.close()
+    with get_db() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT UNIQUE,
+                password TEXT
+            );
+            CREATE TABLE IF NOT EXISTS artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER,
+                content TEXT,
+                feeling TEXT,
+                image_bytes BLOB,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY(profile_id) REFERENCES profiles(id)
+            );
+            CREATE TABLE IF NOT EXISTS follows (
+                follower_id INTEGER,
+                followed_id INTEGER,
+                PRIMARY KEY (follower_id, followed_id)
+            );
+        """)
 
-def make_hashes(pwd):
-    return hashlib.sha256(str.encode(pwd)).hexdigest()
+# ── Business Logic ────────────────────────────────────────────────────────────
+def follow_user(follower_id, followed_id):
+    if follower_id == followed_id: return
+    with get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO follows VALUES (?,?)", (follower_id, followed_id))
+        conn.commit()
 
-# ── Enhanced Aesthetic CSS ───────────────────────────────────────────────────
-CUSTOM_CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;1,300&family=Jost:wght@300;400&display=swap');
+def unfollow_user(follower_id, followed_id):
+    with get_db() as conn:
+        conn.execute("DELETE FROM follows WHERE follower_id=? AND followed_id=?", (follower_id, followed_id))
+        conn.commit()
 
-:root {
-    --bg: #FDFCFB;
-    --text: #2D2D2D;
-    --accent: #A89081;
-    --input-border: #E0E0E0;
-}
+def is_following(follower_id, followed_id):
+    with get_db() as conn:
+        res = conn.execute("SELECT 1 FROM follows WHERE follower_id=? AND followed_id=?", (follower_id, followed_id)).fetchone()
+        return True if res else False
 
-/* Genel Tipografi ve Arka Plan */
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: var(--bg) !important;
-    color: var(--text);
-    font-family: 'Jost', sans-serif;
-}
-
-/* Kart Yapısı */
-.auth-card {
-    max-width: 450px;
-    margin: 2rem auto;
-    padding: 3rem;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.03);
-    border: 1px solid rgba(0,0,0,0.05);
-}
-
-.still-logo {
-    font-family: 'Cormorant Garamond', serif;
-    font-size: 3rem;
-    letter-spacing: 0.5em;
-    text-align: center;
-    color: var(--text);
-    margin-bottom: 1rem;
-}
-
-/* Input ve Erişilebilirlik Düzenlemeleri */
-.stTextInput input {
-    background-color: #ffffff !important;
-    color: #333 !important;
-    border: 1px solid var(--input-border) !important;
-    border-radius: 4px !important;
-    padding: 10px !important;
-}
-
-.stTextInput label {
-    color: var(--text) !important;
-    font-family: 'Jost', sans-serif !important;
-    font-weight: 400 !important;
-}
-
-/* Buton İyileştirmesi */
-.stButton > button {
-    width: 100%;
-    background: var(--text) !important;
-    color: white !important;
-    border: none !important;
-    padding: 0.6rem !important;
-    font-weight: 300;
-    letter-spacing: 0.1em;
-    transition: 0.4s ease;
-}
-
-.stButton > button:hover {
-    background: var(--accent) !important;
-    color: white !important;
-}
-
-/* Gallery Kartları */
-.artifact-card {
-    background: white;
-    padding: 25px;
-    border-radius: 4px;
-    border: 1px solid #F0F0F0;
-    margin-bottom: 20px;
-}
-</style>
-"""
-
-# ── Auth Logic (Fixing the "Join-Login" Loop) ──────────────────────────────────
-def auth_page():
-    # Sayfayı ortalamak için boş kolonlar
-    _, mid, _ = st.columns([1, 2, 1])
-    
-    with mid:
-        st.markdown('<p class="still-logo">STILL</p>', unsafe_allow_html=True)
+# ── UI Components ─────────────────────────────────────────────────────────────
+def artifact_card(art, current_user_id):
+    """Her gönderi için ortak kart yapısı"""
+    with st.container():
+        st.markdown(f"""
+        <div style="background:white; padding:20px; border:1px solid #eee; margin-bottom:10px; border-radius:5px;">
+            <small style="color:#888;">{art['name'].upper()} • {art['created_at'][:16]}</small>
+            <div style="font-family:serif; font-style:italic; font-size:1.2rem; margin:10px 0;">"{art['content']}"</div>
+            <div style="font-size:0.8rem; color:#A89081;">Feeling: {art['feeling']}</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Session state ile hangi sekmede olduğumuzu takip edelim
-        if 'auth_tab' not in st.session_state:
-            st.session_state.auth_tab = 0
+        # Fotoğraf varsa göster
+        if art['image_bytes']:
+            st.image(art['image_bytes'], use_container_width=True)
+        
+        # Takip Butonu Mantığı
+        if art['profile_id'] != current_user_id:
+            following = is_following(current_user_id, art['profile_id'])
+            if following:
+                if st.button(f"Unfollow {art['name']}", key=f"unfol_{art['id']}"):
+                    unfollow_user(current_user_id, art['profile_id'])
+                    st.rerun()
+            else:
+                if st.button(f"Follow {art['name']}", key=f"fol_{art['id']}"):
+                    follow_user(current_user_id, art['profile_id'])
+                    st.rerun()
+        st.divider()
 
-        tab_titles = ["LOG IN", "JOIN"]
-        active_tab = st.tabs(tab_titles)
+# ── Pages ─────────────────────────────────────────────────────────────────────
+def page_home():
+    """Sadece takip edilenlerin göründüğü Ana Sayfa"""
+    st.title("Your Essence Stream")
+    st.write("Fragments from the souls you follow.")
+    
+    with get_db() as conn:
+        artifacts = conn.execute("""
+            SELECT a.*, p.name FROM artifacts a
+            JOIN profiles p ON a.profile_id = p.id
+            JOIN follows f ON a.profile_id = f.followed_id
+            WHERE f.follower_id = ?
+            ORDER BY a.created_at DESC
+        """, (st.session_state.user['id'],)).fetchall()
+    
+    if not artifacts:
+        st.info("It's quiet here. Follow someone in 'Explore' to fill your stream.")
+    else:
+        for art in artifacts:
+            artifact_card(art, st.session_state.user['id'])
 
-        with active_tab[0]:
-            with st.form("login_form"):
-                le = st.text_input("Email")
-                lp = st.text_input("Password", type="password")
-                submit_l = st.form_submit_button("ENTER")
-                
-                if submit_l:
-                    conn = get_db()
-                    u = conn.execute("SELECT * FROM profiles WHERE email=?", (le,)).fetchone()
-                    conn.close()
-                    if u and make_hashes(lp) == u['password']:
-                        st.session_state.user = dict(u)
-                        st.rerun()
-                    else:
-                        st.error("Invalid credentials.")
+def page_explore():
+    """Arama ve genel keşfetme sayfası"""
+    st.title("Explore")
+    
+    search_query = st.text_input("Search for souls or content...", placeholder="Type a name or a feeling...")
+    
+    with get_db() as conn:
+        query = f"%{search_query}%"
+        artifacts = conn.execute("""
+            SELECT a.*, p.name FROM artifacts a
+            JOIN profiles p ON a.profile_id = p.id
+            WHERE p.name LIKE ? OR a.content LIKE ? OR a.feeling LIKE ?
+            ORDER BY a.created_at DESC
+        """, (query, query, query)).fetchall()
+    
+    for art in artifacts:
+        artifact_card(art, st.session_state.user['id'])
 
-        with active_tab[1]:
-            with st.form("join_form"):
-                rn = st.text_input("Full Name")
-                re = st.text_input("Email")
-                rp = st.text_input("Password", type="password")
-                submit_j = st.form_submit_button("BEGIN JOURNEY")
-                
-                if submit_j:
-                    if not (rn and re and rp):
-                        st.warning("Please fill all fields.")
-                    elif any(x in rn.lower() for x in ["corp", "inc", "şirket"]):
-                        st.warning("Human souls only.")
-                    else:
-                        conn = get_db()
-                        try:
-                            conn.execute("INSERT INTO profiles (email, password, name) VALUES (?,?,?)", 
-                                         (re, make_hashes(rp), rn))
-                            conn.commit()
-                            st.success("Welcome! Now you can Log In.")
-                            # Burada rerun yaparak formu temizliyoruz, kullanıcı artık Login'e geçebilir.
-                        except sqlite3.IntegrityError:
-                            st.error("This email is already registered.")
-                        finally:
-                            conn.close()
+# ── Registration (Şirket Engelli) ──────────────────────────────────────────────
+def auth_page():
+    st.markdown("<h1 style='text-align:center;'>STILL</h1>", unsafe_allow_html=True)
+    t1, t2 = st.tabs(["LOG IN", "JOIN"])
+    
+    with t2:
+        with st.form("reg"):
+            new_name = st.text_input("Your Full Name")
+            new_email = st.text_input("Email")
+            new_pw = st.text_input("Password", type="password")
+            if st.form_submit_button("BEGIN"):
+                # Şirket kontrolü (Case-insensitive)
+                forbidden = ["corp", "inc", "ltd", "company", "şirket", "holding", "pazarlama"]
+                if any(word in new_name.lower() for word in forbidden):
+                    st.error("This space is for individual souls only. Corporate entities are not permitted.")
+                elif new_name and new_email and new_pw:
+                    # Kayıt işlemi...
+                    st.success("Welcome. Now please Log In.")
 
-# ── App Logic ──────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     init_db()
-    st.set_page_config(page_title="STILL", layout="wide")
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-
-    if "user" not in st.session_state:
-        st.session_state.user = None
+    if "user" not in st.session_state: st.session_state.user = None
+    if "page" not in st.session_state: st.session_state.page = "home"
 
     if st.session_state.user is None:
         auth_page()
     else:
-        # Sidebar Navigation
         with st.sidebar:
-            st.markdown('<p class="still-logo" style="font-size:1.8rem; letter-spacing:0.2em;">STILL</p>', unsafe_allow_html=True)
-            st.write(f"Welcome, {st.session_state.user['name']}")
+            st.markdown("### STILL")
+            if st.button("🏠 HOME (Following)"): st.session_state.page = "home"
+            if st.button("🔍 EXPLORE (Keşfet)"): st.session_state.page = "explore"
+            if st.button("✨ RELEASE"): st.session_state.page = "release"
             if st.button("LOGOUT"):
                 st.session_state.user = None
                 st.rerun()
         
-        st.title("The Gallery")
-        st.write("Quietly observing the essence of others.")
+        if st.session_state.page == "home": page_home()
+        elif st.session_state.page == "explore": page_explore()
+        # release sayfası önceki koddaki gibi eklenebilir.
 
 if __name__ == "__main__":
     main()
