@@ -139,10 +139,10 @@ def main():
     else:
         with st.sidebar:
             st.markdown("<h2>STILL</h2>", unsafe_allow_html=True)
-            if st.button("🏠 Stream"): st.session_state.page = "home"
-            if st.button("🔍 Explore"): st.session_state.page = "explore"
-            if st.button("👤 Profile"): st.session_state.page = "profile"
-            if st.button("✨ Release"): st.session_state.page = "release"
+            if st.button("Stream"): st.session_state.page = "home"
+            if st.button("Explore"): st.session_state.page = "explore"
+            if st.button("Profile"): st.session_state.page = "profile"
+            if st.button("Release"): st.session_state.page = "release"
             st.divider()
             if st.button("Depart"): st.session_state.user = None; st.rerun()
 
